@@ -102,9 +102,38 @@ pub fn apply_gaussian_filter(renderer: &dyn Renderer, tv: wgpu::TextureView) -> 
         view_formats: &[],
     });
 
-    let input_size_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Gaussian filter: Input size buffer"),
-        contents: bytemuck::cast_slice(&[in_texture.width() as i32, in_texture.height() as i32]),
+    let kernel = {
+        fn gauss(sigma: f32, x: f32, y: f32) -> f32 {
+            (1. / (2. * std::f32::consts::PI * sigma * sigma))
+                * std::f32::consts::E.powf(-(x * x + y * y) / (2. * sigma * sigma))
+        }
+
+        let sigma = 1.6;
+        let mut kernel = [[0.; 4]; 3];
+
+        let mut total_sum = 0.;
+        for x in (-1)..2 {
+            for y in (-1)..2 {
+                let value = gauss(sigma, x as f32, y as f32);
+                kernel[(x + 1) as usize][(y + 1) as usize] = value;
+
+                total_sum += value;
+            }
+        }
+
+        // normalize kernel
+        for x in (-1)..2 {
+            for y in (-1)..2 {
+                kernel[(x + 1) as usize][(y + 1) as usize] /= total_sum;
+            }
+        }
+
+        kernel
+    };
+
+    let kernel_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Gaussian filter: Kernel buffer"),
+        contents: bytemuck::cast_slice(&kernel),
         usage: wgpu::BufferUsages::UNIFORM,
     });
 
@@ -115,7 +144,7 @@ pub fn apply_gaussian_filter(renderer: &dyn Renderer, tv: wgpu::TextureView) -> 
             label: Some("Gaussian filter pipeline"),
             layout: None,
             module: &shader,
-            entry_point: Some("gaussian_filter"),
+            entry_point: None,
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         })
@@ -139,7 +168,7 @@ pub fn apply_gaussian_filter(renderer: &dyn Renderer, tv: wgpu::TextureView) -> 
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: input_size_buffer.as_entire_binding(),
+                resource: kernel_buffer.as_entire_binding(),
             },
         ],
     });
@@ -201,12 +230,6 @@ pub fn apply_sobel_operators(
         view_formats: &[],
     });
 
-    let input_size = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Soeber: Input size"),
-        contents: bytemuck::cast_slice(&[texture.width() as i32, texture.height() as i32]),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
-
     let (vertical_pipeline, horizontal_pipeline) = {
         let shader = device.create_shader_module(include_wgsl!("./kernels.wgsl"));
 
@@ -214,7 +237,7 @@ pub fn apply_sobel_operators(
             label: Some("Vertical Soeber: Compute pipeline"),
             layout: None,
             module: &shader,
-            entry_point: Some("soeber_vertical"),
+            entry_point: None,
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
@@ -224,13 +247,25 @@ pub fn apply_sobel_operators(
                 label: Some("Horizontal Soeber: Compute pipeline"),
                 layout: None,
                 module: &shader,
-                entry_point: Some("soeber_horizontal"),
+                entry_point: None,
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
             });
 
         (vertical_pipeline, horizontal_pipeline)
     };
+
+    let vertical_kernel_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Vertical Soeber: Kernel"),
+        contents: bytemuck::cast_slice(&[-1f32, -2., -1., 0., 0., 0., 0., 0., 1., 2., 1., 0.]),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+
+    let horizontal_kernel_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Horizontal Soeber: Kernel"),
+        contents: bytemuck::cast_slice(&[-1f32, 0., 1., 0., -2., 0., 2., 0., -1., 0., 1., 0.]),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
 
     let vertical_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("Vertical Soeber: Bind group 0"),
@@ -248,7 +283,7 @@ pub fn apply_sobel_operators(
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: input_size.as_entire_binding(),
+                resource: vertical_kernel_buffer.as_entire_binding(),
             },
         ],
     });
@@ -269,7 +304,7 @@ pub fn apply_sobel_operators(
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: input_size.as_entire_binding(),
+                resource: horizontal_kernel_buffer.as_entire_binding(),
             },
         ],
     });
@@ -399,3 +434,93 @@ pub fn apply_magnitude_and_angle(
 
     (magnitude_texture, radians_texture)
 }
+
+pub fn apply_non_maximum_suppression(
+    renderer: &dyn Renderer,
+    magnitudes: wgpu::TextureView,
+    radians: wgpu::TextureView,
+) -> wgpu::Texture {
+    const WORKGROUP_SIZE: u32 = 16;
+
+    let device = renderer.device();
+    let queue = renderer.queue();
+
+    let m_texture = magnitudes.texture();
+
+    let out_texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Non maximum suppression: Texture"),
+        size: m_texture.size(),
+        mip_level_count: m_texture.mip_level_count(),
+        sample_count: m_texture.sample_count(),
+        dimension: m_texture.dimension(),
+        format: m_texture.format(),
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+
+    let pipeline = {
+        let shader = device.create_shader_module(include_wgsl!("./non_maximum_suppression.wgsl"));
+
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Non maximum suppression: Compute pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: None,
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        })
+    };
+
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Non maximum suppression: Bind group"),
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&magnitudes),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&radians),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(
+                    &out_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                ),
+            },
+        ],
+    });
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Non maximum suppression: Command encoder"),
+    });
+
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Non maximum suppression: Compute pass"),
+            timestamp_writes: None,
+        });
+
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.set_pipeline(&pipeline);
+        pass.dispatch_workgroups(
+            m_texture.width().div_ceil(WORKGROUP_SIZE),
+            m_texture.height().div_ceil(WORKGROUP_SIZE),
+            1,
+        );
+    }
+
+    queue.submit(std::iter::once(encoder.finish()));
+
+    out_texture
+}
+
+// pub fn apply_double_thresholding(renderer: &dyn Renderer, non_maximum_suppression: wgpu::TextureView) -> wgpu::Texture {
+//     let device = renderer.device();
+//     let queue = renderer.queue();
+
+//     todo!()
+// }

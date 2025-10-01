@@ -3,7 +3,7 @@ use pollster::FutureExt;
 use std::path::Path;
 use wgpu_canny_edge_detection::{
     Renderer as RendererTrait, apply_gaussian_filter, apply_grayscale, apply_magnitude_and_angle,
-    apply_sobel_operators,
+    apply_non_maximum_suppression, apply_sobel_operators,
 };
 
 struct Renderer {
@@ -215,4 +215,15 @@ fn main() {
     );
     renderer.save_texture(format!("{output_dir}/4_magnitude.png"), &magnitudes);
     renderer.save_texture(format!("{output_dir}/4_radians.png"), &radians);
+
+    // 4. apply non maximum suppression
+    let non_maximum_suppression = apply_non_maximum_suppression(
+        &renderer,
+        magnitudes.create_view(&wgpu::TextureViewDescriptor::default()),
+        radians.create_view(&wgpu::TextureViewDescriptor::default()),
+    );
+    renderer.save_texture(
+        format!("{output_dir}/5_non_maximum_suppression.png"),
+        &non_maximum_suppression,
+    );
 }

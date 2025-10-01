@@ -19,11 +19,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let mag = sqrt(v*v + h*h);
     textureStore(magnitude, gid.xy, vec4f(mag, 0., 0., 1.));
 
-    var rad = atan2(h, v);
+    var rad = 0.;
     // avoid suprises
-    if (v == 0.) {
-        rad = 0.;
-    } else {
+    if (v != 0.) {
         rad = atan2(h, v);
     }
 
