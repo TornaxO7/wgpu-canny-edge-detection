@@ -108,7 +108,7 @@ pub fn apply_gaussian_filter(renderer: &dyn Renderer, tv: wgpu::TextureView) -> 
                 * std::f32::consts::E.powf(-(x * x + y * y) / (2. * sigma * sigma))
         }
 
-        let sigma = 1.6;
+        let sigma = 2.0;
         let mut kernel = [[0.; 4]; 3];
 
         let mut total_sum = 0.;
@@ -648,4 +648,62 @@ pub fn apply_double_thresholding(
     queue.submit(std::iter::once(encoder.finish()));
 
     out_texture
+}
+
+pub fn apply_edge_tracking(
+    renderer: &dyn Renderer,
+    double_thresholding: wgpu::TextureView,
+) -> wgpu::Texture {
+    const WORKGROUP_SIZE: u32 = 16;
+
+    let device = renderer.device();
+    let queue = renderer.queue();
+
+    let texture = double_thresholding.texture().clone();
+
+    let pipeline = {
+        let shader = device.create_shader_module(include_wgsl!("./edge_tracking.wgsl"));
+
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Edge tracking: Compute pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: None,
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        })
+    };
+
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Edge tracking: Bind group"),
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(&double_thresholding),
+        }],
+    });
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Edge tracking: Compute pass"),
+            timestamp_writes: None,
+        });
+
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.set_pipeline(&pipeline);
+
+        for _ in 0..10 {
+            pass.dispatch_workgroups(
+                texture.width().div_ceil(WORKGROUP_SIZE),
+                texture.height().div_ceil(WORKGROUP_SIZE),
+                1,
+            );
+        }
+    }
+
+    queue.submit(std::iter::once(encoder.finish()));
+
+    texture
 }

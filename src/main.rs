@@ -2,8 +2,9 @@ use image::{ImageBuffer, ImageReader, Luma};
 use pollster::FutureExt;
 use std::path::Path;
 use wgpu_canny_edge_detection::{
-    Renderer as RendererTrait, apply_double_thresholding, apply_gaussian_filter, apply_grayscale,
-    apply_magnitude_and_angle, apply_non_maximum_suppression, apply_sobel_operators,
+    Renderer as RendererTrait, apply_double_thresholding, apply_edge_tracking,
+    apply_gaussian_filter, apply_grayscale, apply_magnitude_and_angle,
+    apply_non_maximum_suppression, apply_sobel_operators,
 };
 
 struct Renderer {
@@ -236,4 +237,11 @@ fn main() {
         format!("{output_dir}/6_threshold_texture.png"),
         &threshold_texture,
     );
+
+    // 6. edge tracking
+    let edge_tracking = apply_edge_tracking(
+        &renderer,
+        threshold_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+    );
+    renderer.save_texture(format!("{output_dir}/7_edge_tracking.png"), &edge_tracking);
 }
