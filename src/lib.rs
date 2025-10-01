@@ -518,9 +518,132 @@ pub fn apply_non_maximum_suppression(
     out_texture
 }
 
-// pub fn apply_double_thresholding(renderer: &dyn Renderer, non_maximum_suppression: wgpu::TextureView) -> wgpu::Texture {
-//     let device = renderer.device();
-//     let queue = renderer.queue();
+pub fn apply_double_thresholding(
+    renderer: &dyn Renderer,
+    non_maximum_suppression: wgpu::TextureView,
+) -> wgpu::Texture {
+    const WORKGROUP_SIZE: u32 = 16;
 
-//     todo!()
-// }
+    let device = renderer.device();
+    let queue = renderer.queue();
+
+    let nms_texture = non_maximum_suppression.texture();
+
+    let out_texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Double Threshold: Output texture"),
+        size: nms_texture.size(),
+        mip_level_count: nms_texture.mip_level_count(),
+        sample_count: nms_texture.mip_level_count(),
+        dimension: nms_texture.dimension(),
+        format: nms_texture.format(),
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+
+    let threshold_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Double Threshold: Threshold buffer"),
+        contents: bytemuck::cast_slice(&[0.3f32, 0.7]),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+
+    let max_value = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Double Threshold: Max value buffer"),
+        contents: bytemuck::bytes_of(&0u32),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+
+    let max_value_pipeline = {
+        let shader = device.create_shader_module(include_wgsl!("./max_value.wgsl"));
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Double Threshold: Max value pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: None,
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        })
+    };
+
+    let threshold_pipeline = {
+        let shader = device.create_shader_module(include_wgsl!("./double_threshoulding.wgsl"));
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Double Threshold: Compute pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: None,
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        })
+    };
+
+    let max_value_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Double Threshold: Max value bind group"),
+        layout: &max_value_pipeline.get_bind_group_layout(0),
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&non_maximum_suppression),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: max_value.as_entire_binding(),
+            },
+        ],
+    });
+
+    let double_threshold_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Double Threshould: Bind group 0"),
+        layout: &threshold_pipeline.get_bind_group_layout(0),
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&non_maximum_suppression),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(
+                    &out_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                ),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: max_value.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: threshold_buffer.as_entire_binding(),
+            },
+        ],
+    });
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Doule Threshold: Compute pass"),
+            timestamp_writes: None,
+        });
+
+        pass.set_bind_group(0, &max_value_bind_group, &[]);
+        pass.set_pipeline(&max_value_pipeline);
+        pass.dispatch_workgroups(
+            nms_texture.width().div_ceil(WORKGROUP_SIZE),
+            nms_texture.height().div_ceil(WORKGROUP_SIZE),
+            1,
+        );
+
+        pass.set_bind_group(0, &double_threshold_bind_group, &[]);
+        pass.set_pipeline(&threshold_pipeline);
+        pass.dispatch_workgroups(
+            nms_texture.width().div_ceil(WORKGROUP_SIZE),
+            nms_texture.height().div_ceil(WORKGROUP_SIZE),
+            1,
+        );
+    }
+
+    queue.submit(std::iter::once(encoder.finish()));
+
+    out_texture
+}
