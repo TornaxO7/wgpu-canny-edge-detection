@@ -1,9 +1,5 @@
-# rust-template
-A template if I want to create a new rust project.
+A library implementation of the [canny-edge-detection] in WPGU.
 
-What it includes:
-- Default nix flake with devShell.
-- Stable toolchain
-- default code formatting
-- CI setup
-- dependabot setup
+> **Note:** This is still a work in progress
+
+[canny-edge-detection]: https://en.wikipedia.org/wiki/Canny_edge_detector
