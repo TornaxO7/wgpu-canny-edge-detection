@@ -626,6 +626,7 @@ pub fn apply_double_thresholding(
             timestamp_writes: None,
         });
 
+        // set `max_value` first
         pass.set_bind_group(0, &max_value_bind_group, &[]);
         pass.set_pipeline(&max_value_pipeline);
         pass.dispatch_workgroups(
@@ -634,6 +635,7 @@ pub fn apply_double_thresholding(
             1,
         );
 
+        // now apply thresholds
         pass.set_bind_group(0, &double_threshold_bind_group, &[]);
         pass.set_pipeline(&threshold_pipeline);
         pass.dispatch_workgroups(
