@@ -1,10 +1,7 @@
-use image::ImageBuffer;
-use image::ImageReader;
-use image::Rgba;
+use image::{ImageBuffer, ImageReader, Luma};
 use pollster::FutureExt;
 use std::path::Path;
-use wgpu_canny_edge_detection::Renderer as RendererTrait;
-use wgpu_canny_edge_detection::apply_gaussian_filter;
+use wgpu_canny_edge_detection::{Renderer as RendererTrait, apply_grayscale};
 
 struct Renderer {
     device: wgpu::Device,
@@ -34,37 +31,33 @@ impl Renderer {
         Self { device, queue }
     }
 
-    pub fn save_texture<P: AsRef<Path>>(&self, path: P, texture: wgpu::Texture) {
-        println!("Saving texture...");
-        if texture.format() != wgpu::TextureFormat::Rgba8Unorm {
-            panic!(
-                "Texture has format: '{:?}' but `Rgba8UnormSrgb` is required.",
-                texture.format()
-            );
+    pub fn save_texture<P: AsRef<Path>>(&self, path: P, texture: &wgpu::Texture) {
+        print!("Saving texture...");
+        if texture.format() != wgpu::TextureFormat::R32Float {
+            panic!("Texture has format: '{:?}'", texture.format());
         }
 
         let device = self.device();
         let queue = self.queue();
 
         let size = texture.size();
+        let unpadded_bytes_per_row = std::mem::size_of::<f32>() as u32 * size.width;
+        let padded_bytes_per_row = unpadded_bytes_per_row.next_multiple_of(256);
 
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Output buffer"),
-            size: ((std::mem::size_of::<[u8; 4]>() as u32 * size.width).next_multiple_of(256)
-                * size.height) as wgpu::BufferAddress,
+            size: (padded_bytes_per_row * size.height) as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-
-        let padded_bytes_per_row =
-            (std::mem::size_of::<[u8; 4]>() as u32 * size.width).next_multiple_of(256);
-        let unpadded_bytes_per_row = std::mem::size_of::<[u8; 4]>() * size.width as usize;
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Saving command encoder"),
+        });
 
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &texture,
+                texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -92,20 +85,75 @@ impl Renderer {
 
             // now buffer is mapped
             let range = slice.get_mapped_range();
-            let mut rgba_data: Vec<u8> =
-                Vec::with_capacity(unpadded_bytes_per_row * size.height as usize);
+            let r32floats: &[f32] = bytemuck::cast_slice(&range);
 
-            for row in range.chunks(padded_bytes_per_row as usize) {
-                rgba_data.extend_from_slice(&row[..unpadded_bytes_per_row]);
+            let bytes_per_f32 = std::mem::size_of::<f32>() as u32;
+            let floats_per_row = (unpadded_bytes_per_row / bytes_per_f32) as usize;
+            let padded_floats_per_row = (padded_bytes_per_row / bytes_per_f32) as usize;
+
+            let mut luma_data: Vec<u8> =
+                Vec::with_capacity((floats_per_row * size.height as usize) as usize);
+
+            for row in r32floats.chunks(padded_floats_per_row) {
+                // take only the real pixels, skip padded floats at end of row
+                let r32floats = &row[..floats_per_row];
+                for r32float in r32floats {
+                    let luma = r32float.powf(1. / 2.2) * 255.;
+                    luma_data.push(luma as u8);
+                }
             }
 
-            let image_buffer: ImageBuffer<Rgba<u8>, Vec<u8>> =
-                ImageBuffer::from_raw(size.width, size.height, rgba_data).unwrap();
+            let image_buffer: ImageBuffer<Luma<u8>, Vec<u8>> =
+                ImageBuffer::from_raw(size.width, size.height, luma_data).unwrap();
 
             image_buffer.save(path).unwrap();
         }
 
+        println!("DONE");
         buffer.unmap();
+    }
+
+    fn load_rgba_image(&self, in_img: image::DynamicImage) -> wgpu::Texture {
+        print!("Loading texture... ");
+
+        let device = self.device();
+        let queue = self.queue();
+
+        let img = in_img.to_rgba8();
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Input texture"),
+            size: wgpu::Extent3d {
+                width: img.width(),
+                height: img.height(),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &img.as_raw(),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(std::mem::size_of::<[u8; 4]>() as u32 * img.width()),
+                rows_per_image: Some(img.height()),
+            },
+            texture.size(),
+        );
+
+        println!("DONE");
+        texture
     }
 }
 
@@ -128,11 +176,25 @@ fn main() {
     args.next();
 
     let input_file = args.next().expect("Input file path is added");
-    let output_file = args.next().expect("Output file path is added");
+    let output_dir = args.next().expect("Output dir path is added");
 
     let input = ImageReader::open(input_file).unwrap().decode().unwrap();
 
-    let texture = apply_gaussian_filter(&renderer, input);
+    let input_texture = renderer.load_rgba_image(input);
+    let gray_scale = apply_grayscale(
+        &renderer,
+        input_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+    );
 
-    renderer.save_texture(output_file, texture);
+    renderer.save_texture(format!("{output_dir}/gray_scale.png"), &gray_scale);
+
+    // let gaussian = apply_gaussian_filter(&renderer, input);
+    // renderer.save_texture(format!("{output_dir}/dulmenc.png"), &gaussian);
+
+    // let (horizont, vertical) = compute_sobel_operators(
+    //     &renderer,
+    //     gaussian.create_view(&wgpu::TextureViewDescriptor::default()),
+    // );
+    // renderer.save_texture(format!("{output_dir}/horizontal.png"), &horizont);
+    // renderer.save_texture(format!("{output_dir}/vertical.png"), &vertical);
 }

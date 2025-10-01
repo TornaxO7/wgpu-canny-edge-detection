@@ -12,15 +12,43 @@ struct InputSize {
 @group(0) @binding(2)
 var<uniform> input_size: InputSize;
 
-const kernel = array(
-    array(.075, .124, .075),
-    array(.124, .204, .124),
-    array(.075, .124, .075),
-);
+@compute
+@workgroup_size(16, 16, 1)
+fn gaussian_filter(@builtin(global_invocation_id) gid: vec3u) {
+    const kernel = array(
+        array(.075, .124, .075),
+        array(.124, .204, .124),
+        array(.075, .124, .075),
+    );
+
+    apply_kernel(gid, kernel);
+}
 
 @compute
 @workgroup_size(16, 16, 1)
-fn main(@builtin(global_invocation_id) gid: vec3u) {
+fn soeber_vertical(@builtin(global_invocation_id) gid: vec3u) {
+    const kernel = array(
+        array(-1., -2., -1.),
+        array( 0.,  0.,  0.),
+        array( 1.,  2.,  1.),
+    );
+
+    apply_kernel(gid, kernel);
+}
+
+@compute
+@workgroup_size(16, 16, 1)
+fn soeber_horizontal(@builtin(global_invocation_id) gid: vec3u) {
+    const kernel = array(
+        array(-1., 0., 1.),
+        array(-2., 0., 2.),
+        array(-1., 0., 1.),
+    );
+
+    apply_kernel(gid, kernel);
+}
+
+fn apply_kernel(gid: vec3u, kernel: array<array<f32, 3>, 3>) {
     let igid = vec2i(gid.xy);
 
     var sum: vec3f = vec3f(0.);
