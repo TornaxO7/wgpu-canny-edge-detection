@@ -1,7 +1,10 @@
 use image::{ImageBuffer, ImageReader, Luma};
 use pollster::FutureExt;
 use std::path::Path;
-use wgpu_canny_edge_detection::{Renderer as RendererTrait, apply_grayscale};
+use wgpu_canny_edge_detection::{
+    Renderer as RendererTrait, apply_gaussian_filter, apply_grayscale, apply_magnitude_and_angle,
+    apply_sobel_operators,
+};
 
 struct Renderer {
     device: wgpu::Device,
@@ -181,20 +184,35 @@ fn main() {
     let input = ImageReader::open(input_file).unwrap().decode().unwrap();
 
     let input_texture = renderer.load_rgba_image(input);
+
+    // 1. gray scaling
     let gray_scale = apply_grayscale(
         &renderer,
         input_texture.create_view(&wgpu::TextureViewDescriptor::default()),
     );
+    renderer.save_texture(format!("{output_dir}/1_gray_scale.png"), &gray_scale);
 
-    renderer.save_texture(format!("{output_dir}/gray_scale.png"), &gray_scale);
+    // 2. Remove noise with gaussian filtering
+    let gaussian = apply_gaussian_filter(
+        &renderer,
+        gray_scale.create_view(&wgpu::TextureViewDescriptor::default()),
+    );
+    renderer.save_texture(format!("{output_dir}/2_gaussian.png"), &gaussian);
 
-    // let gaussian = apply_gaussian_filter(&renderer, input);
-    // renderer.save_texture(format!("{output_dir}/dulmenc.png"), &gaussian);
+    // 3.1 Detect horizontal and vertical edges
+    let (horizontal, vertical) = apply_sobel_operators(
+        &renderer,
+        gaussian.create_view(&wgpu::TextureViewDescriptor::default()),
+    );
+    renderer.save_texture(format!("{output_dir}/3_horizontal.png"), &horizontal);
+    renderer.save_texture(format!("{output_dir}/3_vertical.png"), &vertical);
 
-    // let (horizont, vertical) = compute_sobel_operators(
-    //     &renderer,
-    //     gaussian.create_view(&wgpu::TextureViewDescriptor::default()),
-    // );
-    // renderer.save_texture(format!("{output_dir}/horizontal.png"), &horizont);
-    // renderer.save_texture(format!("{output_dir}/vertical.png"), &vertical);
+    // 3.2 compute gradient magnitude
+    let (magnitudes, radians) = apply_magnitude_and_angle(
+        &renderer,
+        vertical.create_view(&wgpu::TextureViewDescriptor::default()),
+        horizontal.create_view(&wgpu::TextureViewDescriptor::default()),
+    );
+    renderer.save_texture(format!("{output_dir}/4_magnitude.png"), &magnitudes);
+    renderer.save_texture(format!("{output_dir}/4_radians.png"), &radians);
 }

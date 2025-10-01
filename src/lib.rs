@@ -24,7 +24,9 @@ pub fn apply_grayscale(renderer: &dyn Renderer, tv: wgpu::TextureView) -> wgpu::
         sample_count: 1,
         dimension: in_texture.dimension(),
         format: wgpu::TextureFormat::R32Float,
-        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
 
@@ -79,62 +81,24 @@ pub fn apply_grayscale(renderer: &dyn Renderer, tv: wgpu::TextureView) -> wgpu::
     out_texture
 }
 
-pub fn apply_gaussian_filter(
-    renderer: &dyn Renderer,
-    input_img: image::DynamicImage,
-) -> wgpu::Texture {
+pub fn apply_gaussian_filter(renderer: &dyn Renderer, tv: wgpu::TextureView) -> wgpu::Texture {
     const WORKGROUP_SIZE: u32 = 16;
 
     let device = renderer.device();
     let queue = renderer.queue();
-    let img = input_img.to_rgba8();
 
-    let in_texture = {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Gaussian filtered texture"),
-            size: wgpu::Extent3d {
-                width: img.width(),
-                height: img.height(),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            bytemuck::cast_slice(img.as_raw()),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(img.width() * std::mem::size_of::<[u8; 4]>() as u32),
-                rows_per_image: Some(img.height()),
-            },
-            texture.size(),
-        );
-
-        texture
-    };
+    let in_texture = tv.texture();
 
     let out_texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Gaussian filter: Output tetxure"),
         size: in_texture.size(),
-        mip_level_count: 1,
-        sample_count: 1,
+        mip_level_count: in_texture.mip_level_count(),
+        sample_count: in_texture.sample_count(),
         dimension: in_texture.dimension(),
         format: in_texture.format(),
         usage: wgpu::TextureUsages::STORAGE_BINDING
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_DST
-            | wgpu::TextureUsages::COPY_SRC,
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
 
@@ -145,7 +109,7 @@ pub fn apply_gaussian_filter(
     });
 
     let pipeline = {
-        let shader = device.create_shader_module(include_wgsl!("./shader.wgsl"));
+        let shader = device.create_shader_module(include_wgsl!("./kernels.wgsl"));
 
         device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Gaussian filter pipeline"),
@@ -200,7 +164,7 @@ pub fn apply_gaussian_filter(
     out_texture
 }
 
-pub fn compute_sobel_operators(
+pub fn apply_sobel_operators(
     renderer: &dyn Renderer,
     tv: wgpu::TextureView,
 ) -> (wgpu::Texture, wgpu::Texture) {
@@ -218,9 +182,9 @@ pub fn compute_sobel_operators(
         sample_count: texture.sample_count(),
         dimension: texture.dimension(),
         format: texture.format(),
-        usage: wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::COPY_DST
-            | wgpu::TextureUsages::STORAGE_BINDING,
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
 
@@ -231,9 +195,9 @@ pub fn compute_sobel_operators(
         sample_count: texture.sample_count(),
         dimension: texture.dimension(),
         format: texture.format(),
-        usage: wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::COPY_DST
-            | wgpu::TextureUsages::STORAGE_BINDING,
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
 
@@ -244,7 +208,7 @@ pub fn compute_sobel_operators(
     });
 
     let (vertical_pipeline, horizontal_pipeline) = {
-        let shader = device.create_shader_module(include_wgsl!("./shader.wgsl"));
+        let shader = device.create_shader_module(include_wgsl!("./kernels.wgsl"));
 
         let vertical_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Vertical Soeber: Compute pipeline"),
@@ -332,4 +296,106 @@ pub fn compute_sobel_operators(
     queue.submit(std::iter::once(encoder.finish()));
 
     (horizontal_texture, vertical_texture)
+}
+
+pub fn apply_magnitude_and_angle(
+    renderer: &dyn Renderer,
+    vertical: wgpu::TextureView,
+    horizontal: wgpu::TextureView,
+) -> (wgpu::Texture, wgpu::Texture) {
+    const WORKGROUP_SIZE: u32 = 16;
+
+    let device = renderer.device();
+    let queue = renderer.queue();
+
+    let vtexture = vertical.texture();
+
+    let magnitude_texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Magnitude: Texture"),
+        size: vtexture.size(),
+        mip_level_count: vtexture.mip_level_count(),
+        sample_count: vtexture.sample_count(),
+        dimension: vtexture.dimension(),
+        format: vtexture.format(),
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+
+    let radians_texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Radians: Texture"),
+        size: vtexture.size(),
+        mip_level_count: vtexture.mip_level_count(),
+        sample_count: vtexture.sample_count(),
+        dimension: vtexture.dimension(),
+        format: vtexture.format(),
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+
+    let pipeline = {
+        let shader = device.create_shader_module(include_wgsl!("./magnitude.wgsl"));
+
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Magnitude: Compute pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: None,
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        })
+    };
+
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Magnitude: Bind group"),
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&vertical),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&horizontal),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(
+                    &magnitude_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                ),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(
+                    &radians_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                ),
+            },
+        ],
+    });
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Magnitude: Command encoder"),
+    });
+
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Magnitude: Compute pass"),
+            timestamp_writes: None,
+        });
+
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.set_pipeline(&pipeline);
+        pass.dispatch_workgroups(
+            vtexture.width().div_ceil(WORKGROUP_SIZE),
+            vtexture.height().div_ceil(WORKGROUP_SIZE),
+            1,
+        );
+    }
+
+    queue.submit(std::iter::once(encoder.finish()));
+
+    (magnitude_texture, radians_texture)
 }

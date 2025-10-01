@@ -2,7 +2,7 @@
 var input: texture_2d<f32>;
 
 @group(0) @binding(1)
-var output: texture_storage_2d<rgba8unorm, write>;
+var output: texture_storage_2d<r32float, write>;
 
 struct InputSize {
     width: i32,
@@ -51,7 +51,7 @@ fn soeber_horizontal(@builtin(global_invocation_id) gid: vec3u) {
 fn apply_kernel(gid: vec3u, kernel: array<array<f32, 3>, 3>) {
     let igid = vec2i(gid.xy);
 
-    var sum: vec3f = vec3f(0.);
+    var sum: f32 = 0.;
     for (var x = -1; x < 2; x++) {
         for (var y = -1; y < 2; y++) {
             let coords: vec2i = igid + vec2i(x, y);
@@ -64,12 +64,10 @@ fn apply_kernel(gid: vec3u, kernel: array<array<f32, 3>, 3>) {
                 return;
             }
 
-            sum += kernel[x + 1][y + 1] * textureLoad(input, coords, 0).rgb;
+            sum += kernel[x + 1][y + 1] * textureLoad(input, coords, 0).r;
         }
     }
 
-    sum = clamp(vec3f(0.), vec3f(1.), sum);
-
-    let input_pixel = textureLoad(input, igid, 0);
-    textureStore(output, igid, vec4f(sum, input_pixel.a));
+    sum = clamp(0., 1., sum);
+    textureStore(output, igid, vec4f(sum, 0., 0., 1.));
 }
