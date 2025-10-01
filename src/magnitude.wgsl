@@ -22,7 +22,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     var rad = 0.;
     // avoid suprises
     if (v != 0.) {
-        rad = atan2(h, v);
+        rad = atan2(v, h);
     }
 
     textureStore(radian, gid.xy, vec4f(rad, 0., 0., 1.));
