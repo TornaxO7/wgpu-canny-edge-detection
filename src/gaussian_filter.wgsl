@@ -1,0 +1,47 @@
+@group(0) @binding(0)
+var input: texture_2d<f32>;
+
+@group(0) @binding(1)
+var output: texture_storage_2d<rgba8unorm, write>;
+
+struct InputSize {
+    width: i32,
+    height: i32,
+};
+
+@group(0) @binding(2)
+var<uniform> input_size: InputSize;
+
+const kernel = array(
+    array(.075, .124, .075),
+    array(.124, .204, .124),
+    array(.075, .124, .075),
+);
+
+@compute
+@workgroup_size(16, 16, 1)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+    let igid = vec2i(gid.xy);
+
+    var sum: vec3f = vec3f(0.);
+    for (var x = -1; x < 2; x++) {
+        for (var y = -1; y < 2; y++) {
+            let coords: vec2i = igid + vec2i(x, y);
+
+            let is_over_the_top = coords.y < 0;
+            let is_over_left_edge = coords.x < 0;
+            let is_over_right_edge = coords.x >= input_size.width;
+            let is_below_bottom_edge = coords.y >= input_size.height;
+            if (is_over_the_top || is_over_left_edge || is_over_right_edge || is_below_bottom_edge) {
+                return;
+            }
+
+            sum += kernel[x + 1][y + 1] * textureLoad(input, coords, 0).rgb;
+        }
+    }
+
+    sum = clamp(vec3f(0.), vec3f(1.), sum);
+
+    let input_pixel = textureLoad(input, igid, 0);
+    textureStore(output, igid, vec4f(sum, input_pixel.a));
+}

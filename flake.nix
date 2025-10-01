@@ -26,8 +26,24 @@
             let
               rust-toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
             in
-            pkgs.mkShell {
+            pkgs.mkShell rec {
               packages = [ rust-toolchain ];
+
+              nativeBuildInputs = with pkgs; [
+                pkg-config
+                makeWrapper
+              ];
+
+              buildInputs = with pkgs; [
+                libGL
+                libxkbcommon
+
+                vulkan-loader
+                vulkan-validation-layers
+                vulkan-tools
+              ];
+
+              LD_LIBRARY_PATH = "$LD_LIBRARY_PATH:${lib.makeLibraryPath buildInputs}";
             };
         };
       };
