@@ -6,10 +6,6 @@ pub trait Renderer {
     fn queue(&self) -> &wgpu::Queue;
 }
 
-pub fn detect_edges(_renderer: &dyn Renderer, _img: image::DynamicImage) -> wgpu::Texture {
-    todo!()
-}
-
 pub fn apply_grayscale(renderer: &dyn Renderer, tv: wgpu::TextureView) -> wgpu::Texture {
     const WORKGROUP_SIZE: u32 = 16;
 
