@@ -108,24 +108,24 @@ pub fn apply_gaussian_filter(renderer: &dyn Renderer, tv: wgpu::TextureView) -> 
                 * std::f32::consts::E.powf(-(x * x + y * y) / (2. * sigma * sigma))
         }
 
-        let sigma = 2.0;
-        let mut kernel = [[0.; 4]; 3];
+        let sigma = 1.6;
+        let kernel_size = 10isize;
+        let half_kernel_size = kernel_size / 2;
+        let mut kernel: Vec<f32> = Vec::with_capacity((kernel_size * kernel_size) as usize);
 
         let mut total_sum = 0.;
-        for x in (-1)..2 {
-            for y in (-1)..2 {
+        for x in (-half_kernel_size)..=half_kernel_size {
+            for y in (-half_kernel_size)..=half_kernel_size {
                 let value = gauss(sigma, x as f32, y as f32);
-                kernel[(x + 1) as usize][(y + 1) as usize] = value;
+                kernel.push(value);
 
                 total_sum += value;
             }
         }
 
         // normalize kernel
-        for x in (-1)..2 {
-            for y in (-1)..2 {
-                kernel[(x + 1) as usize][(y + 1) as usize] /= total_sum;
-            }
+        for value in kernel.iter_mut() {
+            *value /= total_sum;
         }
 
         kernel
@@ -134,7 +134,7 @@ pub fn apply_gaussian_filter(renderer: &dyn Renderer, tv: wgpu::TextureView) -> 
     let kernel_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Gaussian filter: Kernel buffer"),
         contents: bytemuck::cast_slice(&kernel),
-        usage: wgpu::BufferUsages::UNIFORM,
+        usage: wgpu::BufferUsages::STORAGE,
     });
 
     let pipeline = {
@@ -257,14 +257,14 @@ pub fn apply_sobel_operators(
 
     let vertical_kernel_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Vertical Soeber: Kernel"),
-        contents: bytemuck::cast_slice(&[-1f32, -2., -1., 0., 0., 0., 0., 0., 1., 2., 1., 0.]),
-        usage: wgpu::BufferUsages::UNIFORM,
+        contents: bytemuck::cast_slice(&[-1f32, -2., -1., 0., 0., 0., 1., 2., 1.]),
+        usage: wgpu::BufferUsages::STORAGE,
     });
 
     let horizontal_kernel_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Horizontal Soeber: Kernel"),
-        contents: bytemuck::cast_slice(&[-1f32, 0., 1., 0., -2., 0., 2., 0., -1., 0., 1., 0.]),
-        usage: wgpu::BufferUsages::UNIFORM,
+        contents: bytemuck::cast_slice(&[-1f32, 0., 1., -2., 0., 2., -1., 0., 1.]),
+        usage: wgpu::BufferUsages::STORAGE,
     });
 
     let vertical_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -544,7 +544,7 @@ pub fn apply_double_thresholding(
 
     let threshold_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Double Threshold: Threshold buffer"),
-        contents: bytemuck::cast_slice(&[0.3f32, 0.7]),
+        contents: bytemuck::cast_slice(&[0.2f32, 0.7]),
         usage: wgpu::BufferUsages::UNIFORM,
     });
 

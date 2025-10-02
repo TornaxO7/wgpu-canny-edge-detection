@@ -5,18 +5,20 @@ var input: texture_2d<f32>;
 var output: texture_storage_2d<r32float, write>;
 
 @group(0) @binding(2)
-var<uniform> kernel: array<vec4f, 3>;
+var<storage, read> kernel: array<f32>;
 
 @compute
 @workgroup_size(16, 16, 1)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
     let igid = vec2i(gid.xy);
 
+    let kernel_size = i32(round(sqrt(f32(arrayLength(&kernel)))));
+    let half_kernel_size = kernel_size / 2;
     let input_size: vec2i = vec2i(textureDimensions(input));
-
+    
     var sum: f32 = 0.;
-    for (var x = -1; x < 2; x++) {
-        for (var y = -1; y < 2; y++) {
+    for (var x = -half_kernel_size; x <= half_kernel_size; x++) {
+        for (var y = -half_kernel_size; y <= half_kernel_size; y++) {
             let coords: vec2i = igid + vec2i(x, y);
 
             let is_over_the_top = coords.y < 0;
@@ -27,7 +29,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
                 return;
             }
 
-            sum += kernel[x + 1][y + 1] * textureLoad(input, coords, 0).r;
+            sum += kernel[(x + half_kernel_size) + kernel_size * (y + half_kernel_size)] * textureLoad(input, coords, 0).r;
         }
     }
 
