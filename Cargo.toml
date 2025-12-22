@@ -7,7 +7,7 @@ license = "GPL-2.0"
 repository = "https://github.com/TornaxO7/wgpu-canny-edge-detection"
 
 [dependencies]
-wgpu = { version = "26.0", default-features = false, features = [
+wgpu = { version = "28.0", default-features = false, features = [
   # from the default features
   "parking_lot",
   "std",
